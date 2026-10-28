@@ -7,7 +7,6 @@ speed_of_light = 299_792_458.0
 max_speed = 0.01 * speed_of_light
 max_mu = 2.0
 max_duration = 120.0
-min_visible_time = 0.2
 
 
 @dataclass(frozen=True)
@@ -38,7 +37,16 @@ class Scenario:
     @property
     def can_roll(self):
         ratio = self.mass * self.radius**2 / self.inertia
-        return np.tan(self.alpha) <= self.mu * (1.0 + ratio)
+
+        required = np.tan(self.alpha)
+        available = self.mu * (1.0 + ratio)
+
+        return required <= available or np.isclose(
+            required,
+            available,
+            rtol=16 * np.finfo(float).eps,
+            atol=0.0,
+        )
 
 
 def validate(scenario):
@@ -107,12 +115,6 @@ def validate(scenario):
             "(1% скорости света)"
         )
 
-    center_speed_bound = np.sqrt(2 * energy / scenario.mass)
-    if scenario.length / center_speed_bound < min_visible_time:
-        errors.append(
-            f"шар может пройти склон быстрее чем за {min_visible_time} с — "
-            "уменьшите v0 или увеличьте длину"
-        )
     return errors
 
 

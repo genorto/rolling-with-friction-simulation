@@ -63,6 +63,12 @@ def simulate(scenario, fps=60):
     reached_end_of_slope.terminal = True  # type: ignore[attr-defined]
 
     def returned_to_top(t, state):
+        if start_at_top:
+            if stationary_at_top:
+                return 1.0
+            if t == t_start:
+                return initial_velocity
+            return state[0] / (t - t_start)
         return state[0]
 
     returned_to_top.terminal = True  # type: ignore[attr-defined]
@@ -74,9 +80,11 @@ def simulate(scenario, fps=60):
     slip_stopped.terminal = True  # type: ignore[attr-defined]
 
     t_grid = np.arange(0.0, t_max, 1.0 / fps)
+    t_grid = np.append(t_grid[t_grid < t_max], t_max)
     state = [0.0, scenario.v0, 0.0, scenario.omega0, 0.0]
     t_start = 0.0
     segments = []
+    times = []
 
     while True:
         direction = choose_mode(scenario, state[1] - state[3] * scenario.radius)
@@ -87,6 +95,14 @@ def simulate(scenario, fps=60):
             equations = slipping_equations(scenario, direction)
             slip_stopped.direction = -direction  # type: ignore[attr-defined]
             events = [reached_end_of_slope, returned_to_top, slip_stopped]
+
+        start_at_top = state[0] == 0.0
+        initial_velocity = state[1]
+        stationary_at_top = (
+            start_at_top
+            and initial_velocity == 0.0
+            and equations(t_start, state)[1] == 0.0
+        )
 
         if segments:
             t_eval = t_grid[t_grid > t_start]
@@ -101,18 +117,36 @@ def simulate(scenario, fps=60):
             rtol=1e-9,
             atol=1e-12,
         )
-        segments.append(solution.y)
+        if not solution.success:
+            raise RuntimeError(f"Ошибка численного интегрирования: {solution.message}")
+        if np.size(solution.y):
+            segments.append(solution.y)
+            times.append(solution.t)
 
         if direction is None or solution.t_events[2].size == 0:
             break
 
-        t_start = solution.t_events[2][0]
+        next_start = solution.t_events[2][0]
+        if next_start <= t_start:
+            raise RuntimeError("Смена режима произошла без продвижения времени")
+        if next_start >= t_max:
+            break
+        t_start = next_start
         state = list(solution.y_events[2][0])
         state[1] = state[3] * scenario.radius
 
     y = np.concatenate(segments, axis=1)
+    t = np.concatenate(times)
+    for event_times, event_states in zip(solution.t_events, solution.y_events):
+        if event_times.size:
+            if event_times[0] > t[-1]:
+                t = np.append(t, event_times[0])
+                y = np.column_stack((y, event_states[0]))
+            else:
+                y[:, -1] = event_states[0]
+            break
     return Solution(
-        t=t_grid[: y.shape[1]],
+        t=t,
         s=y[0],
         v=y[1],
         phi=y[2],
